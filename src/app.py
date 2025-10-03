@@ -5,8 +5,7 @@ import requests
 import os
 from dotenv import load_dotenv
 import os
-import json
-
+import yaml
 from utils import LoggerSetup, YAMLReader
 
 load_dotenv(override=True)
@@ -14,15 +13,11 @@ load_dotenv(override=True)
 # TODO: Ability to reset CSV through discord
 # TODO: Get CSV script easily callable every 5 minutes (if needed)
 # TODO: Fix NaN values in CSV 
-# TODO: 
 
 logger = LoggerSetup("Rijksoverheid").get_logger()
 
 config = YAMLReader().get_yaml("config.yaml")
 stream_state = YAMLReader().get_yaml("stream_state.yaml")
-
-current_streamer = stream_state['current_streamer']
-last_message = stream_state['last_message']
 
 # Access the variables
 CLOUDFLARE_API_KEY = os.getenv("CLOUDFLARE_API_KEY")
@@ -31,14 +26,9 @@ DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 logger.info(f"API keys loaded successfully!\nDiscord URL: {DISCORD_WEBHOOK_URL}")
 
 
-logger.info(f"Raid train bot started! Initial channel: {current_channel}")
-
 # Cloudflare redirect update function
 def update_cloudflare_redirect(new_channel):
     """Update Cloudflare redirect rule."""
-    global current_channel
-    if new_channel == current_channel:
-        return  
 
     body = {
         "action": "redirect",
@@ -70,7 +60,6 @@ def update_cloudflare_redirect(new_channel):
         try:
             response = requests.patch(url, headers=headers, json=body)
             response.raise_for_status()
-            current_channel = new_channel
             logger.info(f"Successfully updated to {new_channel}")
             break
         except requests.RequestException as e:
@@ -79,76 +68,94 @@ def update_cloudflare_redirect(new_channel):
     else:
         logger.error(f"Failed to apply change after 3 attempts.")
 
-while True:
-    logger.info(f"Started script")
-    # Reload CSV file inside loop to get latest schedule
-    try:
-        csv = pd.read_csv('event_lineup.csv')
-    except Exception as e:
-        logger.error(f"Error reading CSV file: {e}")
-        time.sleep(100)
-        continue
 
-    for _, row in csv.iterrows():
+class StreamUpdater:
+    def __init__(self, csv_file):
+        self.csv_file = csv_file
+        self.current_streamer = stream_state['current_streamer']
+        self.last_message = stream_state['last_message']
+    
+    def run(self):
+        while True:
+            self.check_schedule()
+            time.sleep(300)
+
+    def check_schedule(self):
         try:
-            # Get stream times and fix
-            stream_time = dt.datetime.strptime(row['starttime'], '%Y-%m-%dT%H:%M:%S')
-            hour_csv, day_csv = stream_time.hour+1, stream_time.day
-            hour_current, day_current = dt.datetime.now().hour, dt.datetime.now().day
-             
-            if hour_csv == hour_current and day_csv == day_current:
-                logger.info(f"Current hour: {hour_current}, CSV hour found as: {hour_csv}")
-                new_channel = row['username']
-                logger.info(f"Currently playing: {new_channel}")
-
-                if new_channel != current_channel: 
-                    # Send the new channel to current channel
-                    current_channel = new_channel
-
-                    # Define your message to send
-                    message = f"<@&{config['role_to_tag']}>\n\n https://twitch.tv/{current_channel} is taking over the raid train!"
-                    
-                    # Send the POST request
-                    response = requests.post(f"{DISCORD_WEBHOOK_URL}?wait=true", json={"content": message})
-
-                    if response.status_code in [200, 204]:
-                        try:
-                            response_json = response.json()
-                            logger.info(f"Message sent. ID: {response_json.get('id')}")
-                        except ValueError:
-                            logger.info(f"Message sent successfully (no JSON response).")
-                    else:
-                        logger.warning(f"Failed to send Discord message: {response.status_code}, {response.text}")
-                    
-                    # Remove the last sent message defined in Last message
-                    logger.info(f"Message to delete: {last_message}")
-
-                    response = requests.delete(f"{DISCORD_WEBHOOK_URL}/messages/{last_message}")
-                    last_message = response_json.get('id')
-                    if response.status_code in [200, 204]:
-                        try:
-                            logger.info(f"Message removed.")
-                        except ValueError:
-                            logger.info(f"Message deleted successfully (no JSON response).")
-                    else:
-                        logger.warning(f"Failed to find Discord message: {response.status_code}, {response.text}")
-
-                    # Update config.json for the new streamer and message update.
-                    try:
-                        with open('config.json', 'w') as config_file:
-                            json.dump({"current_channel": current_channel, "last_message": last_message}, config_file, indent=4)
-                        logger.info(f"Config file updated successfully.")
-                    except Exception as e:
-                        logger.error(f"Error updating config.json: {e}")
-
-                    # Update the cloudflare redirect link
-                    update_cloudflare_redirect(new_channel)
-
-                # Catch if current_streamer and new_streamer are the same    
-                else:
-                    logger.info(f"Streamer has not changed.")
+            csv = pd.read_csv(self.csv_file).dropna()
         except Exception as e:
-            logger.warning(f"Error processing row {row}: {e}")
+            logger.error(f"Error reading CSV file: {e}")
+            time.sleep(100)
+            return
 
-    # Wait for 5 minutes
-    time.sleep(300)
+        now = dt.datetime.now()
+        for _, row in csv.iterrows():
+            stream_time = dt.datetime.strptime(row['starttime'], '%Y-%m-%dT%H:%M:%S')
+            if stream_time.hour + 1 == now.hour and stream_time.day == now.day:
+                new_channel = row['username']
+                logger.info(f"Schedule match found. Current streamer should be {new_channel}.")
+                if new_channel != self.current_streamer:
+                    self._switch_stream(new_channel)
+                else:
+                    logger.info("Streamer unchanged.")
+                break
+        else:
+            logger.info("No matching streamer for current time.")
+
+    def _stream_switcher(self, new_channel):
+        # Send the new channel to discord
+        self.current_streamer = new_channel
+        self._message_remover(self.last_message)
+        self.last_message = self._message_sender(self.current_streamer)
+
+        # Update streamer_state.yaml for the new streamer and message update.
+        self._stream_state_updater(self.current_streamer, self.last_message)
+
+        # Update the cloudflare redirect link
+        update_cloudflare_redirect(self.current_streamer)
+
+        # Wait for 5 minutes
+        time.sleep(300)
+
+    def _stream_state_updater(self, current_streamer, last_message):
+        with open('stream_state.yaml', 'w') as file:
+            yaml_send = {
+                'current_streamer': current_streamer,
+                'last_message': last_message,
+            }
+    
+            yaml.dump(yaml_send, file)
+
+    def _message_sender(self, current_streamer):
+        # Define your message to send
+        message = f"<@&{config['role_to_tag']}>\n\n https://twitch.tv/{current_streamer} is taking over the raid train!"
+        
+        # Send the POST request
+        response = requests.post(f"{DISCORD_WEBHOOK_URL}?wait=true", json={"content": message})
+        if response.status_code in [200, 204]:
+            try:
+                response_json = response.json()
+                logger.info(f"Message sent. ID: {response_json.get('id')}")
+            except ValueError:
+                logger.info(f"Message sent successfully (no JSON response).")
+        else:
+            logger.warning(f"Failed to send Discord message: {response.status_code}, {response.text}")
+        
+        return response_json.get('id')
+ 
+    def _message_remover(self, last_message):
+        # Remove the last sent message defined in Last message
+        logger.info(f"Message to delete: {last_message}")
+
+        response = requests.delete(f"{DISCORD_WEBHOOK_URL}/messages/{last_message}")
+
+        if response.status_code in [200, 204]:
+            try:
+                logger.info(f"Message removed.")
+            except ValueError:
+                logger.info(f"Message deleted successfully (no JSON response).")
+        else:
+            logger.warning(f"Failed to find Discord message: {response.status_code}, {response.text}")                 
+
+while True:
+    StreamUpdater("data/event_lineup.csv").run()
