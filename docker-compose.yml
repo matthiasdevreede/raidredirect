@@ -1,0 +1,18 @@
+# Created using https://www.composerize.com/
+name: raidredirect
+services:
+    raid-redirect-app:
+        stdin_open: true
+        tty: true
+        volumes:
+            - $(pwd):/app
+            - python-packages:/root/.local
+        working_dir: /app
+        environment:
+            - PYTHONUSERBASE=/root/.local
+        image: python:3.10
+        command: bash -c "pip install -r requirements.txt && python main.py"
+volumes:
+    python-packages:
+        external: true
+        name: python-packages
