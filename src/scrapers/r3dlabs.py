@@ -2,17 +2,8 @@ import requests
 import csv
 import datetime as dt
 from utils import LoggerSetup
-import yaml
 
-# TODO: Add better logging
-
-try:
-    with open("config.yaml") as stream:
-        config = yaml.safe_load(stream)
-except yaml.YAMLError as exception:
-    print(f"Error loading config: {exception}")
-    config = {}
-
+logger = LoggerSetup(__name__).get_logger()
 
 def get_event_id_from_slug(slug):
     """Fetch the event ID using the provided slug."""
@@ -24,16 +15,16 @@ def get_event_id_from_slug(slug):
         return event_data.get("id")
     
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching event ID for slug '{slug}': {e}")
+        logger.error(f"Error fetching event ID for slug '{slug}': {e}")
         return None
 
-def export_event_lineup_to_csv(event_slug, output_csv):
+def lineup_to_csv(event_slug, output_csv):
     """Export the event lineup to a CSV file."""
 
     # Step 1: Get the event ID using the slug
     event_id = get_event_id_from_slug(event_slug)
     if not event_id:
-        print(f"Failed to retrieve event ID for slug: {event_slug}")
+        logger.error(f"Failed to retrieve event ID for slug: {event_slug}")
         return
 
     # Step 2: Use the event ID to fetch the lineup
@@ -61,7 +52,6 @@ def export_event_lineup_to_csv(event_slug, output_csv):
             else:
                 username = ""
                 country = ""
-            # print(user,user_channel,start_date,end_date)
 
             csv_data.append([
                 username,
@@ -79,14 +69,9 @@ def export_event_lineup_to_csv(event_slug, output_csv):
             writer = csv.writer(csvfile)
             writer.writerows(csv_data)
         
-        print(f"CSV exported successfully to {output_csv}")
+        logger.info(f"CSV exported successfully to {output_csv}")
 
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching event lineup: {e}")
+        logger.error(f"Error fetching event lineup: {e}")
     except Exception as e:
-        print(f"Error processing data: {e}")
-
-# Usage
-event_slug = config['raid_train_slug']  # Replace with your event slug
-output_csv = f"./data/{config['csv_file_name']}"
-export_event_lineup_to_csv(event_slug, output_csv)
+        logger.error(f"Error processing data: {e}")

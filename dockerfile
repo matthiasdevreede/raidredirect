@@ -9,4 +9,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy rest of project
 COPY . .
 
-CMD ["python", "src/app.py"]
+CMD ["python", "src/main.py"]

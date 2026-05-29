@@ -30,9 +30,9 @@ class LoggerSetup:
         logger : logging.Logger
             Configured logger instance.
         """
-        
         # Create logger
-        logger = logging.getLogger('Logger')
+        logger = logging.getLogger(self.name)
+        logger.propagate = False
         logger.setLevel(logging.DEBUG)
         formatter = logging.Formatter('%(asctime)s - %(levelname)s - [%(filename)s] %(message)s')
 
@@ -47,8 +47,9 @@ class LoggerSetup:
         console_handler.setLevel(logging.DEBUG)
         console_handler.setFormatter(formatter)
 
-        logger.addHandler(file_handler)
-        logger.addHandler(console_handler)
+        if not logger.handlers:
+            logger.addHandler(file_handler)
+            logger.addHandler(console_handler)
         
         return logger
 

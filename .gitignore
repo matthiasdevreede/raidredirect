@@ -1,3 +1,5 @@
 .env
 *.log
 src/__pycache__/*
+data/*
+env/*

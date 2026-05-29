@@ -8,4 +8,4 @@ services:
     volumes:
       - .:/app   # live code sync
 
-    command: python src/app.py
+    command: python src/main.py
