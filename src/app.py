@@ -4,6 +4,7 @@ import datetime as dt
 import requests
 import os
 from dotenv import load_dotenv
+from scrape_r3dlabs import export_event_lineup_to_csv
 import os
 import yaml
 from utils import LoggerSetup, YAMLReader
@@ -14,7 +15,7 @@ load_dotenv(override=True)
 # TODO: Get CSV script easily callable every 5 minutes (if needed)
 # TODO: Fix NaN values in CSV 
 
-logger = LoggerSetup("Rijksoverheid").get_logger()
+logger = LoggerSetup("__main__").get_logger()
 
 config = YAMLReader().get_yaml("config.yaml")
 stream_state = YAMLReader().get_yaml("stream_state.yaml")
@@ -23,8 +24,16 @@ stream_state = YAMLReader().get_yaml("stream_state.yaml")
 CLOUDFLARE_API_KEY = os.getenv("CLOUDFLARE_API_KEY")
 CLOUDFLARE_URL = os.getenv("CLOUDFLARE_URL")
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
-logger.info(f"API keys loaded successfully!\nDiscord URL: {DISCORD_WEBHOOK_URL}")
 
+logger.info(f"Token present: {bool(CLOUDFLARE_API_KEY)}")
+logger.info(f"URL: {CLOUDFLARE_URL}")
+
+logger.info(f"API keys loaded successfully!")
+logger.info(f"Discord URL: {DISCORD_WEBHOOK_URL}")
+
+event_slug = config['raid_train_slug']  # Replace with your event slug
+output_csv = f"./data/{config['csv_file_name']}"
+export_event_lineup_to_csv(event_slug, output_csv)
 
 # Cloudflare redirect update function
 def update_cloudflare_redirect(new_channel):
@@ -43,7 +52,7 @@ def update_cloudflare_redirect(new_channel):
         },
         "description": f"{config['cloudflare_rule_name']} Redirect",
         "enabled": True,
-        "expression": f'(http.host eq "{config['cloudflare_rule_name']}.raidredirect.com")',
+        "expression": f'(http.host eq "{config["cloudflare_rule_name"]}.raidredirect.com")',
         "id": f"{config['cloudflare_rule_id']}",
         "ref": f"{config['cloudflare_rule_id']}",
         "version": "4"
@@ -63,10 +72,16 @@ def update_cloudflare_redirect(new_channel):
             logger.info(f"Successfully updated to {new_channel}")
             break
         except requests.RequestException as e:
-            logger.warning(f"Error applying change. Attempt {attempt + 1} of 3. Error: {e}")
+            if e.response is not None:
+                logger.warning(
+                    f"Attempt {attempt+1}/3 failed\n"
+                    f"Status: {e.response.status_code}\n"
+                    f"Body: {e.response.text}"
+                )
+            else:
+                logger.warning(f"Request failed: {e}")
+
             time.sleep(60)
-    else:
-        logger.error(f"Failed to apply change after 3 attempts.")
 
 
 class StreamUpdater:
@@ -74,7 +89,6 @@ class StreamUpdater:
         self.csv_file = csv_file
         self.current_streamer = stream_state['current_streamer']
         self.last_message = stream_state['last_message']
-    
     def run(self):
         while True:
             self.check_schedule()
@@ -82,25 +96,32 @@ class StreamUpdater:
 
     def check_schedule(self):
         try:
-            csv = pd.read_csv(self.csv_file).dropna()
+            csv = pd.read_csv(self.csv_file).dropna(subset='username')
+            csv["starttime"] = pd.to_datetime(csv["starttime"], format="%Y-%m-%dT%H:%M:%S", errors="coerce")
+
         except Exception as e:
             logger.error(f"Error reading CSV file: {e}")
             time.sleep(100)
             return
 
         now = dt.datetime.now()
-        for _, row in csv.iterrows():
-            stream_time = dt.datetime.strptime(row['starttime'], '%Y-%m-%dT%H:%M:%S')
-            if stream_time.hour + 1 == now.hour and stream_time.day == now.day:
-                new_channel = row['username']
-                logger.info(f"Schedule match found. Current streamer should be {new_channel}.")
-                if new_channel != self.current_streamer:
-                    self._switch_stream(new_channel)
-                else:
-                    logger.info("Streamer unchanged.")
-                break
+        print(now)
+        window_start = now - dt.timedelta(hours=2)
+
+        match = csv[
+            (csv["starttime"] <= now) &
+            (csv["starttime"] >= window_start)
+        ]
+
+        if not match.empty:
+            new_channel = match.iloc[0]["username"]
+
+            if new_channel != self.current_streamer:
+                self._stream_switcher(new_channel)
+            else:
+                logger.info("Streamer unchanged.")
         else:
-            logger.info("No matching streamer for current time.")
+            logger.info("No matching streamer.")
 
     def _stream_switcher(self, new_channel):
         # Send the new channel to discord
@@ -158,4 +179,4 @@ class StreamUpdater:
             logger.warning(f"Failed to find Discord message: {response.status_code}, {response.text}")                 
 
 while True:
-    StreamUpdater("data/event_lineup.csv").run()
+    StreamUpdater("data/raidtrain.csv").run()

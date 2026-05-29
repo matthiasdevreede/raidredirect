@@ -1,9 +1,18 @@
 import requests
 import csv
-import datetime
+import datetime as dt
+from utils import LoggerSetup
+import yaml
 
-# TODO: Fix whatever the fuck this is lol
-# TODO: YAML Config file again
+# TODO: Add better logging
+
+try:
+    with open("config.yaml") as stream:
+        config = yaml.safe_load(stream)
+except yaml.YAMLError as exception:
+    print(f"Error loading config: {exception}")
+    config = {}
+
 
 def get_event_id_from_slug(slug):
     """Fetch the event ID using the provided slug."""
@@ -13,12 +22,14 @@ def get_event_id_from_slug(slug):
         response.raise_for_status()
         event_data = response.json()
         return event_data.get("id")
+    
     except requests.exceptions.RequestException as e:
         print(f"Error fetching event ID for slug '{slug}': {e}")
         return None
 
 def export_event_lineup_to_csv(event_slug, output_csv):
     """Export the event lineup to a CSV file."""
+
     # Step 1: Get the event ID using the slug
     event_id = get_event_id_from_slug(event_slug)
     if not event_id:
@@ -34,30 +45,34 @@ def export_event_lineup_to_csv(event_slug, output_csv):
         slot_list = event_data.get("slot_list", [])
         
         # Prepare CSV data columns
-        csv_data = [["username", "user_country", "starttime","startday","starthour"]]
+        csv_data = [["username", "user_country", "starttime","startday","starthour","endtime","endday","endhour"]]
         
         for slot in slot_list:
             user_channel = slot.get("user_channel", {})
             user = slot.get("user", {})
-            iso_time = slot.get("start_datetime", "")
-
-            if user is not None:
-                csv_data.append([
-                    user_channel.get("display_name", "") if user_channel else '', # Username, with validation is there is a user there.
-                    user['country'] if user["country"] else "", # User country
-                    iso_time, # Time in ISO format
-                    datetime.datetime.fromisoformat(iso_time).strftime('%m-%d'), # Month and Day of slot
-                    datetime.datetime.fromisoformat(iso_time).strftime('%H:%M') # Hour and minute of slot
-                ])
+            start_date = slot.get("start_datetime", "")
+            end_date = slot.get("end_datetime", "")
+            if user != None:
+                username = user_channel.get("display_name", "")
+                country = ""
+            elif slot.get("reserved", {}) == True:
+                username = "RESERVED"
+                country = ""
             else:
-                print(f"User not found in slot data for {iso_time}")
-                csv_data.append([
-                    '', # Username, with validation is there is a user there.
-                    '', # User country
-                    iso_time, # Time in ISO format
-                    datetime.datetime.fromisoformat(iso_time).strftime('%m-%d'), # Month and Day of slot
-                    datetime.datetime.fromisoformat(iso_time).strftime('%H:%M') # Hour and minute of slot
-                ])
+                username = ""
+                country = ""
+            # print(user,user_channel,start_date,end_date)
+
+            csv_data.append([
+                username,
+                country,
+                start_date, # Time in ISO format
+                dt.datetime.fromisoformat(start_date).strftime('%m-%d'), # Month and Day of slot
+                dt.datetime.fromisoformat(start_date).strftime('%H:%M'), # Hour and minute of slot
+                end_date,
+                dt.datetime.fromisoformat(end_date).strftime('%m-%d'), # Month and Day of slot
+                dt.datetime.fromisoformat(end_date).strftime('%H:%M') # Hour and minute of slot
+            ])
         
         # Write to CSV
         with open(output_csv, mode="w", newline="", encoding="utf-8") as csvfile:
@@ -72,6 +87,6 @@ def export_event_lineup_to_csv(event_slug, output_csv):
         print(f"Error processing data: {e}")
 
 # Usage
-event_slug = "sky-bass-horizon"  # Replace with your event slug
-output_csv = "/event_lineup.csv"
+event_slug = config['raid_train_slug']  # Replace with your event slug
+output_csv = f"./data/{config['csv_file_name']}"
 export_event_lineup_to_csv(event_slug, output_csv)
